@@ -46,7 +46,22 @@ For geysers, time spent heating is separate from being left switched on between 
 
 ## Publishing
 
-Build with `npm run build` and publish `dist` to any static HTTPS host (for example GitHub Pages, Cloudflare Pages, or a static hosting service). Serve JavaScript workers with correct MIME types. HTTPS is needed for WebGPU outside localhost; network access to the public model and OCR language asset hosts is needed on first use. Review model licenses and browser/device compatibility before release.
+### GitHub Pages
+
+The [deployment workflow](.github/workflows/deploy.yml) installs dependencies, runs tests and lint, builds the app, and publishes `dist` whenever `main` is updated. It can also be started manually.
+
+1. Open [repository Settings > Pages](https://github.com/mrajat31/wattwise/settings/pages).
+2. Under **Build and deployment**, select **GitHub Actions** as the **Source**.
+3. Open [Actions](https://github.com/mrajat31/wattwise/actions), select **Deploy WattWise to GitHub Pages**, and choose **Run workflow** on `main` if the initial push ran before Pages was enabled.
+4. Once deployment succeeds, open **https://mrajat31.github.io/wattwise/**.
+
+Production builds and previews use `/wattwise/` so JavaScript, styles, and workers resolve correctly on this project site. `npm run dev` still serves at `/`; use `npm run preview` and open `http://localhost:4173/wattwise/` to check the production build locally. For a different repository path or a root/custom-domain deployment, update the production `base` in [vite.config.ts](vite.config.ts) before building.
+
+GitHub Pages uses a different browser-storage origin from localhost. Existing local profiles and bills do not transfer automatically: create a profile and upload your bills on the hosted site. Profiles remain local to each browser and are not published in the repository.
+
+### Hosting requirements
+
+Build with `npm run build` and publish `dist` to a static HTTPS host using the configured base path. Serve JavaScript workers with correct MIME types. HTTPS is needed for WebGPU outside localhost; network access to the public model and OCR language asset hosts is needed on first use. Review model licenses and browser/device compatibility before release.
 
 No application API/server secrets are required. There are no per-conversation API charges, but ordinary static hosting/bandwidth costs and the visitor's model-download data costs still apply. Browser AI is optional: the rest of the site must remain usable if model hosts are unavailable or the visitor declines the download.
 
