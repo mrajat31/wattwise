@@ -1,6 +1,49 @@
 import { z } from 'zod'
 
-export const categories = ['AC', 'Fan', 'Geyser', 'Refrigerator', 'Washing machine', 'Dishwasher', 'Induction', 'Computer', 'EV charger', 'Other'] as const
+export const categories = ['AC', 'Fan', 'Geyser', 'Refrigerator', 'Washing machine', 'Dishwasher', 'Induction', 'Computer', 'EV charger', 'Inverter', 'Water purifier', 'Television', 'Speaker', 'Light bulb', 'Tube light', 'Mobile charger', 'Other'] as const
+
+export const approximateWatts: Record<typeof categories[number], number> = {
+  AC: 1120, Fan: 75, Geyser: 2000, Refrigerator: 150,
+  'Washing machine': 500, Dishwasher: 2000, Induction: 2000, Computer: 150,
+  'EV charger': 3300, Inverter: 20, 'Water purifier': 40,
+  Television: 100, Speaker: 20, 'Light bulb': 10, 'Tube light': 20,
+  'Mobile charger': 10, Other: 60,
+}
+
+export const appliancePowerPresets: { id: string; category: typeof categories[number]; label: string; watts: number }[] = [
+  { id: 'tv-led', category: 'Television', label: 'LED TV, roughly 43–55 inches', watts: approximateWatts.Television },
+  { id: 'tv-large', category: 'Television', label: 'Large TV, roughly 65 inches or above', watts: 170 },
+  { id: 'speaker-small', category: 'Speaker', label: 'Small speaker / desktop speakers', watts: approximateWatts.Speaker },
+  { id: 'speaker-theatre', category: 'Speaker', label: 'Soundbar / home theatre', watts: 100 },
+  { id: 'bulb-led', category: 'Light bulb', label: 'LED bulb', watts: approximateWatts['Light bulb'] },
+  { id: 'bulb-cfl', category: 'Light bulb', label: 'CFL bulb', watts: 15 },
+  { id: 'bulb-incandescent', category: 'Light bulb', label: 'Older incandescent bulb', watts: 60 },
+  { id: 'tube-led', category: 'Tube light', label: 'LED tube / batten', watts: approximateWatts['Tube light'] },
+  { id: 'tube-fluorescent', category: 'Tube light', label: 'Older fluorescent tube', watts: 40 },
+  { id: 'phone-normal', category: 'Mobile charger', label: 'Regular phone charging', watts: approximateWatts['Mobile charger'] },
+  { id: 'phone-fast', category: 'Mobile charger', label: 'Fast phone charging', watts: 25 },
+]
+
+export const appliancePowerReferences = [
+  {
+    id: 'aquaguard-delight-nxt-uv', category: 'Water purifier',
+    label: 'UV+UF purifier — Aquaguard Delight NXT', watts: 20,
+    source: 'https://www.eurekaforbes.com/media/downloadfiles/usermanual/NXT_RO%2BUV%2BTA.pdf#page=3',
+    note: '20 W maximum rating for this UV+UF model. Use as a rough active-use reference only, not a measured value for every purifier.',
+  },
+  {
+    id: 'aquaguard-delight-nxt-ro', category: 'Water purifier',
+    label: 'RO+UV / RO+UV+UF purifier — Aquaguard Delight NXT', watts: 40,
+    source: 'https://www.eurekaforbes.com/media/downloadfiles/usermanual/NXT_RO%2BUV%2BTA.pdf#page=4',
+    note: '40 W maximum rating for the RO variants (manual pages 4 and 6). Use as a rough active-use reference only; actual draw varies.',
+  },
+  {
+    id: 'kent-grand-plus', category: 'Water purifier',
+    label: 'Multi-stage RO purifier — KENT Grand Plus', watts: 60,
+    source: 'https://www.kent.co.in/products/kent-grand-plus',
+    note: '60 W published total power rating for this model. Use active filtering hours; separate standby and in-tank UV consumption are not estimated.',
+  },
+] as const
 
 export const billSchema = z.object({
   id: z.string().min(1),
@@ -23,6 +66,7 @@ export const applianceSchema = z.object({
   brand: z.string(),
   model: z.string(),
   watts: z.number().finite().min(1).max(30000),
+  powerReferenceId: z.enum(appliancePowerReferences.map((reference) => reference.id)).optional(),
   stars: z.number().int().min(0).max(5).optional(),
   beeYear: z.number().int().min(1990).max(2100).optional(),
   iseer: z.number().finite().nonnegative().optional(),
@@ -31,7 +75,9 @@ export const applianceSchema = z.object({
   setpoint: z.number().finite().min(18).max(28).optional(),
   standby: z.boolean().optional(),
   count: z.number().int().min(1).max(100),
-})
+}).refine((appliance) => !appliance.powerReferenceId || appliancePowerReferences.some((reference) =>
+  reference.id === appliance.powerReferenceId && reference.category === appliance.category && reference.watts === appliance.watts
+), { message: 'The power reference must match the device category and watts.' })
 
 export type Bill = z.infer<typeof billSchema>
 export type Appliance = z.infer<typeof applianceSchema>

@@ -70,11 +70,15 @@ export default function BillsPanel({ home, onChange, onBlocking }: Props) {
         <span className="button primary"><Plus size={16} /> Choose bills</span>
         <input aria-label="Upload electricity bills" type="file" multiple accept=".pdf,.png,.jpg,.jpeg" disabled={busy} onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ''; void upload(files) }} />
       </label>}
+      {!drafts.length && !busy && <button className="button secondary manual-entry" onClick={() => {
+        setDrafts([{ ...parseBillText('', 'Manual bill'), warning: 'Enter the details shown on your bill. Nothing is guessed.' }])
+        setError(''); setSuccess(''); onBlocking(true)
+      }}><Plus size={16} /> No image? Enter bill manually</button>}
       <p className="privacy-caption">Files are read on this device. Check every bill before saving; no amount or date is invented.</p>
       {busy && <p className="notice" role="status">{status}</p>}
       {error && <div className="alert" role="alert">{error}</div>}
       {success && <p className="success-note" role="status"><Check size={16} />{success}</p>}
-      {!!drafts.length && <div className="review-bills"><div className="section-heading"><div><h3>Check the details from each bill</h3><p>Missing fields stay blank. Please fill them from the original bill.</p></div><button className="text-button" onClick={clearDrafts}>Cancel upload</button></div>
+      {!!drafts.length && <div className="review-bills"><div className="section-heading"><div><h3>Check your bill details</h3><p>Fill missing fields from the original bill.</p></div><button className="text-button" onClick={clearDrafts}>Cancel</button></div>
         {drafts.map((draft, index) => <article className="bill-review" key={draft.id}>
           <div className="section-heading"><h3>{index + 1}. {draft.source}</h3><button className="icon-button" aria-label={`Remove ${draft.source} from upload`} onClick={() => {
             const remaining = drafts.filter((item) => item.id !== draft.id); setDrafts(remaining); if (!remaining.length) onBlocking(false)

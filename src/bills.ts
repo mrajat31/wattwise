@@ -106,7 +106,10 @@ export function parseBillText(text: string, source: string): BillDraft {
   const derivedDays = !billingDays && readingDays >= 1 && readingDays <= 90
   if (derivedDays) billingDays = String(readingDays)
   const fixedCharge = extractNumber(normalized, [/(?:fixed\s*charg(?:e|es)|स्थिर\s*(?:आकार|शुल्क)|निश्चित\s*(?:आकार|शुल्क)|नियत\s*शुल्क|स्थायी\s*शुल्क)\s*[:-]?\s*(?:₹|rs\.?|inr|रु\.?|रू\.?)?\s*([\d,]+(?:\.\d+)?)/i])
-  const consumerNumber = normalized.match(/(?:consumer\s*(?:no\.?|number)|[गह]्राहक\s*(?:क्रमांक|क्र\.?|संख्या|नंबर)|उपभोक्ता\s*(?:संख्या|क्रमांक|नंबर))\s*[:-]?\s*(\d{8,15})(?!\d)/i)?.[1] ?? ''
+  const mappedConsumer = normalized.match(/^Mapped consumer number:[ \t]*([^\n]*)$/m)
+  const consumerNumber = mappedConsumer
+    ? extractNumber(mappedConsumer[1], [/^(\d{8,15})$/])
+    : normalized.match(/(?:consumer\s*(?:no\.?|number)|[गह]्राहक\s*(?:क्रमांक|क्र\.?|संख्या|नंबर)|उपभोक्ता\s*(?:संख्या|क्रमांक|नंबर))\s*[:+-]?\s*(\d{8,15})(?!\d)/i)?.[1] ?? ''
   const phase = /(?:3|three|तीन|थ्री)[ -]?(?:phase|फेज़?|फेज़)/i.test(normalized)
     ? 'Three phase' : /(?:1|single|एक|सिंगल)[ -]?(?:phase|फेज़?|फेज़)/i.test(normalized) ? 'Single phase' : ''
   return {
@@ -129,6 +132,7 @@ export function msedclFieldRegions(lines: OcrLine[], words: OcrLine[] = lines) {
     { label: 'Total consumption', pattern: /एक[ूुृ]?ण\s*वापर|कुल\s*(?:खपत|यूनिट)|total\s*(?:consumption|units)/i, below: true },
     { label: 'Current reading date', pattern: /चाल[ुू]\s*(?:रिडिंग|रीडिंग|वाचन)\s*दिनांक|वर्तमान\s*(?:मीटर\s*)?रीडिंग\s*(?:तिथि|दिनांक)|current\s*reading\s*date/i, below: false },
     { label: 'Previous reading date', pattern: /मागील\s*(?:रिडिंग|रीडिंग|वाचन)\s*दिनांक|पिछली\s*(?:मीटर\s*)?रीडिंग\s*(?:तिथि|दिनांक)|previous\s*reading\s*date/i, below: false },
+    { label: 'Consumer number', pattern: /consumer\s*(?:no\.?|number)|[गह]्राहक\s*(?:क्रमांक|क्र\.?|संख्या|नंबर)|उपभोक्ता\s*(?:संख्या|क्रमांक|नंबर)/i, below: false },
   ]
   for (const { label, pattern, below } of labels) {
     const header = lines.find((line) => pattern.test(normalizeBillText(line.text)))
@@ -136,7 +140,9 @@ export function msedclFieldRegions(lines: OcrLine[], words: OcrLine[] = lines) {
     const box = header.bbox
     const height = box.y1 - box.y0
     const candidates = (below ? words : lines).filter((line) => {
-      if (!/^[\d,./:\s-]+$/.test(normalizeBillText(line.text))) return false
+      const text = normalizeBillText(line.text).trim()
+      if (!/\d/.test(text) || !/^[+\d,./:\s-]+$/.test(text)) return false
+      if (label === 'Consumer number' && !/^\+?\s*\d{8,15}$/.test(text)) return false
       const value = line.bbox
       const centerX = (value.x0 + value.x1) / 2
       return below
@@ -154,7 +160,7 @@ export function msedclFieldRegions(lines: OcrLine[], words: OcrLine[] = lines) {
   }
   if (!fields.some((field) => field.label === 'Total consumption')) {
     const reading = fields.find((field) => field.label === 'Previous reading date')?.line.bbox
-    const status = lines.find((line) => /meter\s*status/i.test(line.text))?.bbox
+    const status = lines.find((line) => /meter\s*status|^status\s*:/i.test(line.text.trim()))?.bbox
     if (reading && status) {
       // Grid lines can hide this legacy MSEDCL header. Its total is above Meter Status,
       // in the rightmost table column, aligned with the reading-date values.
@@ -166,10 +172,118 @@ export function msedclFieldRegions(lines: OcrLine[], words: OcrLine[] = lines) {
           && box.y0 > reading.y1 && box.y1 < status.y0
           && status.y0 - box.y1 < (status.y1 - status.y0) * 4
       }).sort((a, b) => b.bbox.y1 - a.bbox.y1)
-      if (candidates[0]) fields.push({ label: 'Total consumption', line: candidates[0] })
+      if (candidates[0]) {
+        fields.push({ label: 'Total consumption', line: candidates[0] })
+      } else if (fields.some((field) => field.label === 'Current reading date')) {
+        const tableNumbers = words.filter((word) => /^\d+(?:\.\d+)?$/.test(normalizeBillText(word.text).trim())
+          && word.bbox.x0 >= status.x0 && word.bbox.x1 < reading.x0
+          && word.bbox.y0 > reading.y1 && word.bbox.y1 < status.y0
+          && status.y0 - word.bbox.y1 < (status.y1 - status.y0) * 4)
+        const row = tableNumbers.sort((a, b) => b.bbox.y1 - a.bbox.y1)[0]?.bbox
+        if (tableNumbers.length >= 3 && row) {
+          // Reread the total cell when grid lines hide its text; never substitute another column.
+          fields.push({ label: 'Total consumption', line: { text: '', bbox: {
+            x0: reading.x0, x1: reading.x1,
+            y0: row.y0 - (row.y1 - row.y0) / 2,
+            y1: Math.min(status.y0, row.y1 + (status.y1 - status.y0) * 1.5),
+          } } })
+        }
+      }
     }
   }
   return fields
+}
+
+export function cleanNumericCell(pixels: Uint8ClampedArray, width: number, height: number): void {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || pixels.length !== width * height * 4) {
+    throw new Error('The bill cell has invalid image dimensions.')
+  }
+  // Smooth halftone dots before local Otsu thresholding; remove only edge-connected ink.
+  const grey = new Uint8Array(width * height)
+  const smoothed = new Uint8Array(grey.length)
+  const histogram = new Uint32Array(256)
+  for (let index = 0; index < grey.length; index++) {
+    const offset = index * 4
+    grey[index] = Math.round(pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114)
+  }
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0
+      let count = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (x + dx >= 0 && x + dx < width && y + dy >= 0 && y + dy < height) {
+            sum += grey[(y + dy) * width + x + dx]
+            count++
+          }
+        }
+      }
+      const value = Math.round(sum / count)
+      smoothed[y * width + x] = value
+      histogram[value]++
+    }
+  }
+  let totalSum = 0
+  for (let value = 0; value < 256; value++) totalSum += value * histogram[value]
+  let weight = 0
+  let sum = 0
+  let bestVariance = -1
+  let threshold = 0
+  for (let value = 0; value < 256; value++) {
+    weight += histogram[value]
+    sum += value * histogram[value]
+    const remaining = grey.length - weight
+    if (!weight || !remaining) continue
+    const difference = sum / weight - (totalSum - sum) / remaining
+    const variance = weight * remaining * difference * difference
+    if (variance > bestVariance) {
+      bestVariance = variance
+      threshold = value
+    }
+  }
+  for (let index = 0; index < smoothed.length; index++) {
+    const value = smoothed[index] <= threshold ? 0 : 255
+    pixels[index * 4] = pixels[index * 4 + 1] = pixels[index * 4 + 2] = value
+    pixels[index * 4 + 3] = 255
+  }
+  const queue: number[] = []
+  const erase = (x: number, y: number) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return
+    const index = (y * width + x) * 4
+    if (pixels[index] !== 0) return
+    pixels[index] = pixels[index + 1] = pixels[index + 2] = 255
+    queue.push(y * width + x)
+  }
+  for (let x = 0; x < width; x++) {
+    erase(x, 0)
+    erase(x, height - 1)
+  }
+  for (let y = 0; y < height; y++) {
+    erase(0, y)
+    erase(width - 1, y)
+  }
+  for (let index = 0; index < queue.length; index++) {
+    const x = queue[index] % width
+    const y = Math.floor(queue[index] / width)
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) erase(x + dx, y + dy)
+    }
+  }
+}
+
+function prepareNumericCell(image: HTMLCanvasElement, box: OcrLine['bbox']): HTMLCanvasElement {
+  const left = Math.max(0, Math.floor(box.x0 - 4))
+  const top = Math.max(0, Math.floor(box.y0 - 4))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(0, Math.min(image.width, Math.ceil(box.x1 + 4)) - left)
+  canvas.height = Math.max(0, Math.min(image.height, Math.ceil(box.y1 + 4)) - top)
+  const context = canvas.getContext('2d')
+  if (!context || !canvas.width || !canvas.height) throw new Error('This browser could not prepare the total-usage cell. Please enter its units manually.')
+  context.drawImage(image, left, top, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height)
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height)
+  cleanNumericCell(pixels.data, canvas.width, canvas.height)
+  context.putImageData(pixels, 0, 0)
+  return prepareOcrCanvas(canvas, canvas.width, canvas.height)
 }
 
 export async function recognizeBillImage(image: ImageLike, language: BillLanguage = 'mar'): Promise<string> {
@@ -184,17 +298,27 @@ export async function recognizeBillImage(image: ImageLike, language: BillLanguag
       const lines = data.blocks?.flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines)) ?? []
       const words = lines.flatMap((line) => line.words)
       let mappedAmount = ''
-      await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: '0123456789-/.' })
+      let mappedConsumer = ''
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE })
       for (const { label, line } of msedclFieldRegions(lines, words)) {
+        await worker.setParameters({ tessedit_char_whitelist: label === 'Consumer number' ? '0123456789' : '0123456789-/.' })
         const box = line.bbox
         const { data: refined } = await worker.recognize(image, { rectangle: {
           left: Math.max(0, box.x0 - 4), top: Math.max(0, box.y0 - 4),
           width: box.x1 - box.x0 + 8, height: box.y1 - box.y0 + 8,
         } })
-        if (label === 'Bill amount') mappedAmount = refined.text.trim()
-        else if (refined.text.trim()) texts.push(`${label}: ${refined.text.trim()}`)
+        let value = refined.text.trim()
+        if (label === 'Total consumption' && !/\d/.test(normalizeBillText(value))
+          && typeof HTMLCanvasElement !== 'undefined' && image instanceof HTMLCanvasElement) {
+          const { data: cleaned } = await worker.recognize(prepareNumericCell(image, box))
+          value = cleaned.text.trim()
+        }
+        if (label === 'Bill amount') mappedAmount = value
+        else if (label === 'Consumer number') mappedConsumer = value.replace(/\s+/g, '')
+        else if (value) texts.push(`${label}: ${value}`)
       }
       texts.push(`Mapped bill amount: ${mappedAmount}`)
+      if (mappedConsumer) texts.push(`Mapped consumer number: ${mappedConsumer}`)
     }
     return texts.join('\n')
   } finally {

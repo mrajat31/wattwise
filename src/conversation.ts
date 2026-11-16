@@ -19,11 +19,13 @@ export const topics = [
   { label: 'Cooling', question: 'Do you use ACs or fans? Tell me how many and roughly how many hours each runs daily.', chips: ['3 fans for 8 hours a day', '1 AC for 5 hours at 22°C', 'No cooling devices'] },
   { label: 'Hot water', question: 'How do you heat water? If you have a geyser, how long does it run and do you leave it switched on?', chips: ['1 geyser for 30 minutes, off after use', 'Solar hot water, no geyser', 'Geyser left on all day'] },
   { label: 'Kitchen & laundry', question: 'What about your fridge, washing machine, or dishwasher? Tell me the number and daily usage.', chips: ['1 fridge on all day', '1 washing machine for 30 minutes daily', 'No more kitchen devices'] },
-  { label: 'Work & other devices', question: 'Any computers, electric vehicle charging, or other regular loads? You can tell me, or finish your list.', chips: ['1 computer for 8 hours', '1 EV charger for 1 hour daily', 'That is everything'] },
+  { label: 'Lights & other devices', question: 'Any TVs, speakers, bulbs, tube lights, phone chargers, computers, inverters, or purifiers? Tell me how many and their daily hours. We will suggest approximate watts.', chips: ['1 TV for 4 hours', '4 LED bulbs for 5 hours', '2 mobile chargers for 2 hours', '1 Aquaguard purifier for 30 minutes daily', '1 backup inverter always on', 'That is everything'] },
 ]
 
+const tubeLightPattern = /\b(?:(?:(?:led|fluorescent)\s+)?tube\s*lights?|fluorescent\s+tubes?|led\s+tubes?|led\s+battens?)\b/i
+
 const aliases: { category: Appliance['category']; expression: RegExp }[] = [
-  { category: 'AC', expression: /\b(?:acs?|air conditioners?)\b/i },
+  { category: 'AC', expression: /\b(?:inverter\s+)?(?:acs?|air conditioners?)\b/i },
   { category: 'Fan', expression: /\bfans?\b/i },
   { category: 'Geyser', expression: /\b(?:geysers?|water heaters?)\b/i },
   { category: 'Refrigerator', expression: /\b(?:fridges?|refrigerators?)\b/i },
@@ -32,6 +34,13 @@ const aliases: { category: Appliance['category']; expression: RegExp }[] = [
   { category: 'Computer', expression: /\b(?:computers?|desktops?|laptops?)\b/i },
   { category: 'EV charger', expression: /\b(?:ev chargers?|ev charging)\b/i },
   { category: 'Induction', expression: /\binduction(?: cooktops?)?\b/i },
+  { category: 'Inverter', expression: /\b(?:(?:backup|home)\s+)?(?:inverters?|invertors?|ups)\b(?!\s*(?:acs?\b|air\s*conditioners?\b))/i },
+  { category: 'Water purifier', expression: /\b(?:water\s*purifiers?|aquaguard|aquagaurd|aqua\s*guard|ro(?:\s*purifiers?)?|uv\s*purifiers?)\b/i },
+  { category: 'Television', expression: /\b(?:(?:smart|led|oled|qled)\s+)?(?:tvs?|televisions?)\b/i },
+  { category: 'Speaker', expression: /\b(?:(?:bluetooth\s+)?speakers?|sound\s*bars?|home\s+theat(?:re|er)s?)\b/i },
+  { category: 'Tube light', expression: tubeLightPattern },
+  { category: 'Light bulb', expression: /\b(?:(?:led|cfl|incandescent)\s+)?(?:bulbs?|lights?|lamps?)\b/i },
+  { category: 'Mobile charger', expression: /\b(?:(?:mobile|smartphone|usb)\s+(?:phone\s+)?chargers?|phone\s+chargers?|charging\s+(?:mobiles?|phones?))\b/i },
 ]
 
 export function guidedReply(text: string, topic: number): AiReply {
@@ -46,19 +55,23 @@ export function guidedReply(text: string, topic: number): AiReply {
   }
   for (const clause of clauses) {
     for (const alias of aliases) {
-      const match = alias.expression.exec(clause)
+      const match = alias.expression.exec(alias.category === 'Light bulb'
+        ? clause.replace(tubeLightPattern, (value) => ' '.repeat(value.length))
+        : clause)
       if (!match || /\b(?:no|without|don't have|do not have|solar)\b/i.test(clause)) continue
       const count = Number(clause.slice(0, match.index).match(/(\d+)\s*$/)?.[1] ?? 1)
       const hours = clause.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|\bh\b)/i)?.[1]
       const minutes = clause.match(/(\d+(?:\.\d+)?)\s*(?:minutes?|mins?)/i)?.[1]
       const allDay = /all day|24\/7|always on/i.test(clause)
+      const backupCapacity = alias.category === 'Inverter' && hours && /\bbackup\b/i.test(clause)
+        && !/\b(?:daily|per day|a day|each day)\b/i.test(clause)
       const temperature = clause.match(/(?:at\s*)?(\d{2})\s*(?:°\s*c|degrees?|c\b)/i)?.[1]
       const standby = alias.category === 'Geyser'
         ? /left on|leave.*on|all day|standby/i.test(clause) ? true : /off|after use|timer/i.test(clause) ? false : null
         : null
       const proposal = deviceProposalSchema.safeParse({
         category: alias.category, count,
-        hoursPerDay: hours ? Number(hours) : minutes ? Number(minutes) / 60 : allDay && alias.category !== 'Geyser' ? 24 : null,
+        hoursPerDay: hours && !backupCapacity ? Number(hours) : minutes ? Number(minutes) / 60 : allDay && !['Geyser', 'Water purifier', 'Mobile charger'].includes(alias.category) ? 24 : null,
         setpoint: temperature ? Number(temperature) : null, standby,
       })
       if (proposal.success) devices.push(proposal.data)
@@ -99,7 +112,7 @@ export function aiSystemPrompt(appliances: Appliance[], topic: number): string {
 Current topic: ${topics[Math.min(topic, 3)].question}
 Confirmed devices: ${JSON.stringify(appliances.map(({ category, count, hoursPerDay, setpoint, standby }) => ({ category, count, hoursPerDay, setpoint, standby })))}
 Return JSON with reply and devices. Devices are proposals from the LAST user message only, never repeat the confirmed list. Do not claim they are saved until the user confirms.
-Use only these categories: ${categories.join(', ')}. Never invent a user's appliances or exact brand/model specs. Use null for hours, temperature and standby when not stated. Convert minutes to hours. Fridge on all day means 24 hours. Geyser heating runtime is separate from leaving standby on. If the user has no device return devices: [].
+Use only these categories: ${categories.join(', ')}. Never invent a user's appliances or exact brand/model specs. Use null for hours, temperature and standby when not stated. Convert minutes to hours. Fridge on all day means 24 hours. Geyser heating runtime is separate from leaving standby on. Inverter means battery-backup/UPS, not an inverter AC; battery backup duration is not daily running hours. Aquaguard, RO and UV water purifiers use Water purifier; ask for active filtering hours, not just time plugged in. TVs use Television, soundbars/home theatres use Speaker, bulbs use Light bulb, tube lights/battens use Tube light, and phone chargers use Mobile charger. Phone charger hours mean active charging, not time plugged in. The device editor provides editable approximate watts, including an assumed inverter extra-loss allowance, not output VA or full charging power. If the user has no device return devices: [].
 Do not calculate rupee savings or bills: a separate deterministic calculator handles that. Do not diagnose hardware faults from incomplete usage. Do not recommend electrical wiring work. Stay on home energy; refuse unrelated requests briefly.`
 }
 
